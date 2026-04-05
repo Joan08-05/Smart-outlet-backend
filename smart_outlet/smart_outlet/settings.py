@@ -122,3 +122,30 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 AUTH_USER_MODEL = 'api.User'
+# ─── DJANGO REST FRAMEWORK SETTINGS ───────────────────────────────
+REST_FRAMEWORK = {
+    # JWT Authentication is the default for all endpoints
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    # Rate limiting - controls how many requests a user can make
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',   # unauthenticated users
+        'rest_framework.throttling.UserRateThrottle',   # authenticated users
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '20/minute',   # strangers can only make 20 requests per minute
+        'user': '100/minute',  # logged in users can make 100 requests per minute
+    }
+}
+# ─── JWT SETTINGS ─────────────────────────────────────────────────
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    # Access token expires after 30 minutes - short lived for security
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    # Refresh token expires after 7 days
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # Every time refresh token is used, a new one is issued
+    'ROTATE_REFRESH_TOKENS': True,
+}
