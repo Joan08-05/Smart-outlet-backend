@@ -47,6 +47,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # serves static files in production
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -149,3 +150,12 @@ SIMPLE_JWT = {
     # Every time refresh token is used, a new one is issued
     'ROTATE_REFRESH_TOKENS': True,
 }
+# ─── PRODUCTION SETTINGS ───────────────────────────────────────────
+
+# Allowed hosts - will be updated with Render URL after deployment
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+
+# Static files configuration for whitenoise
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
