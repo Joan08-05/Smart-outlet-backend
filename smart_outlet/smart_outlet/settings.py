@@ -153,7 +153,7 @@ SIMPLE_JWT = {
 # ─── PRODUCTION SETTINGS ───────────────────────────────────────────
 
 # Allowed hosts - will be updated with Render URL after deployment
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'smart-outlet-backend.onrender.com']
 
 # Static files configuration for whitenoise
 STATIC_URL = '/static/'
