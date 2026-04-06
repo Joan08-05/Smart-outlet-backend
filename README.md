@@ -1,3 +1,4 @@
+**Live API URL:** https://smart-outlet-backend.onrender.com
 # Smart Electric Outlet Backend
 
 A cloud-based Django REST API backend for a Smart Electric Outlet IoT system built for Tanzanian domestic households.
