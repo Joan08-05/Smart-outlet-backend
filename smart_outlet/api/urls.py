@@ -28,5 +28,5 @@ urlpatterns = [
     # Safety Alerts endpoint
     # GET - mobile app retrieves all safety alerts for logged in user
     path('alerts/', views.safety_alerts, name='safety_alerts'),
-    
+    path('reset-admin/', views.reset_admin_password, name='reset_admin'),
 ]

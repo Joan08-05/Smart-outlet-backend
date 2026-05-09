@@ -246,3 +246,30 @@ def get_pending_command(request, device_id):
     
     # Return the current status for the ESP32 to execute
     return Response({'status': device.status})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_admin_password(request):
+    """
+    Emergency admin creation endpoint - protected by secret key
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    
+    # Secret key check - only you know this
+    if request.data.get('secret') != 'joan2026smart':
+        return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
+    
+    if not User.objects.filter(is_superuser=True).exists():
+        User.objects.create_superuser(
+            username='admin',
+            email='admin@smartoutlet.com',
+            password='SmartAdmin2026!'
+        )
+        return Response({'message': 'Superuser created'})
+    
+    # Reset password if user exists
+    user = User.objects.get(username='admin')
+    user.set_password('SmartAdmin2026!')
+    user.save()
+    return Response({'message': 'Password reset successfully'})
