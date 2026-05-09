@@ -30,4 +30,6 @@ urlpatterns = [
     path('alerts/', views.safety_alerts, name='safety_alerts'),
     
     path('reset-admin/', views.reset_admin_password, name='reset_admin'),
+
+    path('list-users/', views.list_users, name='list_users'),
 ]

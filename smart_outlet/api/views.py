@@ -263,3 +263,15 @@ def reset_admin_password(request):
         return Response({'message': 'Password reset successfully'})
     except User.DoesNotExist:
         return Response({'error': 'Admin not found'})
+    
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_users(request):
+    """
+    TEMPORARY ENDPOINT - DELETE AFTER USE
+    Lists all usernames on live database
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    users = User.objects.all().values('username', 'is_superuser')
+    return Response(list(users))
