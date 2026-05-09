@@ -251,18 +251,20 @@ def get_pending_command(request, device_id):
 def reset_admin_password(request):
     """
     TEMPORARY ENDPOINT - DELETE AFTER USE
-    Resets admin password on live database
+    Creates superuser on live database
     """
     from django.contrib.auth import get_user_model
     User = get_user_model()
     
-    try:
-        user = User.objects.get(username='admin')
-        user.set_password('SmartAdmin2026!')
-        user.save()
-        return Response({'message': 'Password reset successfully'})
-    except User.DoesNotExist:
-        return Response({'error': 'Admin not found'})
+    if User.objects.filter(is_superuser=True).exists():
+        return Response({'error': 'Admin already exists'})
+    
+    User.objects.create_superuser(
+        username='admin',
+        email='admin@smartoutlet.com',
+        password='SmartAdmin2026!'
+    )
+    return Response({'message': 'Superuser created successfully'})
     
 @api_view(['GET'])
 @permission_classes([AllowAny])
