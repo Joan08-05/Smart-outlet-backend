@@ -246,3 +246,20 @@ def get_pending_command(request, device_id):
     
     # Return the current status for the ESP32 to execute
     return Response({'status': device.status})
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_admin_password(request):
+    """
+    TEMPORARY ENDPOINT - DELETE AFTER USE
+    Resets admin password on live database
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    
+    try:
+        user = User.objects.get(username='admin')
+        user.set_password('SmartAdmin2026!')
+        user.save()
+        return Response({'message': 'Password reset successfully'})
+    except User.DoesNotExist:
+        return Response({'error': 'Admin not found'})
