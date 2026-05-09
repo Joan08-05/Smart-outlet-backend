@@ -29,5 +29,4 @@ urlpatterns = [
     # GET - mobile app retrieves all safety alerts for logged in user
     path('alerts/', views.safety_alerts, name='safety_alerts'),
     
-    path('create-admin/', views.create_admin, name='create_admin'),
 ]
