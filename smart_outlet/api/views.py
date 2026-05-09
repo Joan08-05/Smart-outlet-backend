@@ -246,34 +246,3 @@ def get_pending_command(request, device_id):
     
     # Return the current status for the ESP32 to execute
     return Response({'status': device.status})
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def reset_admin_password(request):
-    """
-    TEMPORARY ENDPOINT - DELETE AFTER USE
-    Creates superuser on live database
-    """
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    
-    if User.objects.filter(is_superuser=True).exists():
-        return Response({'error': 'Admin already exists'})
-    
-    User.objects.create_superuser(
-        username='admin',
-        email='admin@smartoutlet.com',
-        password='SmartAdmin2026!'
-    )
-    return Response({'message': 'Superuser created successfully'})
-    
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def list_users(request):
-    """
-    TEMPORARY ENDPOINT - DELETE AFTER USE
-    Lists all usernames on live database
-    """
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    users = User.objects.all().values('username', 'is_superuser')
-    return Response(list(users))
