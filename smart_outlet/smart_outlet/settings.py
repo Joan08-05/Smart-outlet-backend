@@ -43,9 +43,11 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'api',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # serves static files in production
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -159,3 +161,7 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'smart-outlet-backend.onrender.com']
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# ─── CORS SETTINGS ─────────────────────────────────────────────────
+# Allow all origins for now - can be restricted later to specific URLs
+CORS_ALLOW_ALL_ORIGINS = True
