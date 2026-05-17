@@ -273,3 +273,43 @@ def reset_admin_password(request):
     user.set_password('SmartAdmin2026!')
     user.save()
     return Response({'message': 'Password reset successfully'})
+# ─── SCHEDULING ────────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def schedules(request):
+    """
+    GET - Returns all schedules for devices belonging to the logged in user
+    POST - Creates a new schedule for a device
+    Accepts: device, start_time, end_time, repeat_pattern, status
+    Example: {"device": 1, "start_time": "2026-05-17T08:00:00Z", "end_time": "2026-05-17T10:00:00Z", "repeat_pattern": "daily", "status": "active"}
+    """
+    if request.method == 'GET':
+        user_devices = Device.objects.filter(user=request.user)
+        user_schedules = ApplianceSchedule.objects.filter(device__in=user_devices)
+        serializer = ApplianceScheduleSerializer(user_schedules, many=True)
+        return Response(serializer.data)
+    
+    if request.method == 'POST':
+        serializer = ApplianceScheduleSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_schedule(request, schedule_id):
+    """
+    DELETE - Deletes a specific schedule
+    Security: users can only delete schedules for their own devices
+    """
+    try:
+        user_devices = Device.objects.filter(user=request.user)
+        schedule = ApplianceSchedule.objects.get(id=schedule_id, device__in=user_devices)
+    except ApplianceSchedule.DoesNotExist:
+        return Response({'error': 'Schedule not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    schedule.delete()
+    return Response({'message': 'Schedule deleted successfully'})
