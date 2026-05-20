@@ -37,26 +37,29 @@ def register(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # No token required - user needs to login to get token
+@permission_classes([AllowAny])
 def login(request):
     """
     Logs in an existing user.
     Accepts: username, password
-    Returns: access token (short-lived) and refresh token (long-lived)
-    Security: JWT tokens are returned - all future requests must include the access token
+    Returns: access token and refresh token
+    Also records the last login time for the user
     """
     username = request.data.get('username')
     password = request.data.get('password')
     
-    # Django's authenticate checks the username and password against the database
     user = authenticate(username=username, password=password)
     
     if user:
-        # Generate JWT tokens for the authenticated user
+        # Record last login time
+        from django.utils import timezone
+        user.last_login = timezone.now()
+        user.save(update_fields=['last_login'])
+        
         refresh = RefreshToken.for_user(user)
         return Response({
-            'refresh': str(refresh),          # Used to get a new access token when it expires
-            'access': str(refresh.access_token),  # Used in every API request header
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
         })
     return Response(
         {'error': 'Invalid credentials'}, 
@@ -313,3 +316,24 @@ def delete_schedule(request, schedule_id):
     
     schedule.delete()
     return Response({'message': 'Schedule deleted successfully'})
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def device_schedules(request, device_id):
+    """
+    GET - Returns active schedules for a specific device
+    Used by ESP32 to check if any scheduled ON/OFF should be executed
+    """
+    try:
+        device = Device.objects.get(id=device_id)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Device not found'}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    schedules = ApplianceSchedule.objects.filter(
+        device=device,
+        status='active'
+    )
+    serializer = ApplianceScheduleSerializer(schedules, many=True)
+    return Response(serializer.data)
