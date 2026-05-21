@@ -231,13 +231,13 @@ def safety_alerts(request):
 # ─── ESP32 POLLING ─────────────────────────────────────────────────
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])  # JWT token required
+@permission_classes([IsAuthenticated])
 def get_pending_command(request, device_id):
     """
-    This endpoint is polled by the ESP32 microcontroller every few seconds.
-    The ESP32 checks the current device status (ON/OFF) and executes it.
-    This is how remote control works - the mobile app writes the command,
-    the ESP32 reads it through polling.
+    Polled by ESP32 every few seconds.
+    Checks active schedules first - if current time falls within a schedule,
+    returns the scheduled status and updates the device.
+    Otherwise returns the manually set device status.
     """
     try:
         device = Device.objects.get(id=device_id)
@@ -247,7 +247,67 @@ def get_pending_command(request, device_id):
             status=status.HTTP_404_NOT_FOUND
         )
     
-    # Return the current status for the ESP32 to execute
+    # Check if current time falls within any active schedule
+    from django.utils import timezone
+    now = timezone.now()
+    
+    active_schedule = ApplianceSchedule.objects.filter(
+        device=device,
+        status='active',
+        start_time__lte=now,
+        end_time__gte=now
+    ).first()
+    
+    if active_schedule:
+        # Schedule is active right now - determine what action to take
+        # If we are within the schedule window, turn ON
+        scheduled_status = 'ON'
+        
+        # Update device status if it changed
+        if device.status != scheduled_status:
+            device.status = scheduled_status
+            device.save()
+            
+            # Log the scheduled action
+            ControlLog.objects.create(
+                device=device,
+                action=scheduled_status,
+                control_source='schedule'
+            )
+        
+        return Response({
+            'status': scheduled_status,
+            'source': 'schedule',
+            'schedule_ends': active_schedule.end_time
+        })
+    
+    # No active schedule - check if a schedule just ended
+    # If schedule just ended, turn OFF
+    just_ended = ApplianceSchedule.objects.filter(
+        device=device,
+        status='active',
+        end_time__lte=now,
+        end_time__gte=now - timezone.timedelta(seconds=10)
+    ).first()
+    
+    if just_ended:
+        # Schedule just ended - turn device OFF
+        if device.status == 'ON':
+            device.status = 'OFF'
+            device.save()
+            
+            ControlLog.objects.create(
+                device=device,
+                action='OFF',
+                control_source='schedule_ended'
+            )
+        
+        return Response({
+            'status': 'OFF',
+            'source': 'schedule_ended'
+        })
+    
+    # No schedule involved - return current device status
     return Response({'status': device.status})
 
 @api_view(['POST'])
