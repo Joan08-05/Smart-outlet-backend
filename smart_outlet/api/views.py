@@ -70,23 +70,27 @@ def login(request):
 # ─── DEVICE MANAGEMENT ─────────────────────────────────────────────
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])  # JWT token required
+@permission_classes([IsAuthenticated])
 def devices(request):
     """
     GET - Returns all devices belonging to the logged in user
+          Also returns total device count
     POST - Registers a new device and links it to the logged in user
     Security: users can only see and manage their own devices
+    Note: Devices added by admin are also visible here if linked to this user
     """
     if request.method == 'GET':
-        # Filter devices by the currently logged in user
+        # Get ALL devices for this user including ones added by admin
         user_devices = Device.objects.filter(user=request.user)
         serializer = DeviceSerializer(user_devices, many=True)
-        return Response(serializer.data)
+        return Response({
+            'total_devices': user_devices.count(),
+            'devices': serializer.data
+        })
     
     if request.method == 'POST':
         serializer = DeviceSerializer(data=request.data)
         if serializer.is_valid():
-            # Automatically link the new device to the logged in user
             serializer.save(user=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
