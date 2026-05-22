@@ -74,13 +74,58 @@ def login(request):
 def devices(request):
     """
     GET - Returns all devices belonging to the logged in user
-          Also returns total device count
+          Automatically checks and applies active schedules before returning
     POST - Registers a new device and links it to the logged in user
-    Security: users can only see and manage their own devices
-    Note: Devices added by admin are also visible here if linked to this user
     """
     if request.method == 'GET':
-        # Get ALL devices for this user including ones added by admin
+        from django.utils import timezone
+        from django.db.models import Q
+        
+        now = timezone.now()
+        user_devices = Device.objects.filter(user=request.user)
+        
+        # Check schedules for each device and update status if needed
+        for device in user_devices:
+            
+            # Check if there's an active schedule right now
+            active_schedule = ApplianceSchedule.objects.filter(
+                device=device,
+                status='active',
+                start_time__lte=now
+            ).filter(
+                Q(end_time__isnull=True) | Q(end_time__gte=now)
+            ).first()
+            
+            if active_schedule:
+                # Schedule is active - device should be ON
+                if device.status != 'ON':
+                    device.status = 'ON'
+                    device.save()
+                    ControlLog.objects.create(
+                        device=device,
+                        action='ON',
+                        control_source='schedule'
+                    )
+            else:
+                # Check if a schedule just ended recently (within last 30 seconds)
+                just_ended = ApplianceSchedule.objects.filter(
+                    device=device,
+                    status='active',
+                    end_time__isnull=False,
+                    end_time__lte=now,
+                    end_time__gte=now - timezone.timedelta(seconds=30)
+                ).first()
+                
+                if just_ended and device.status == 'ON':
+                    device.status = 'OFF'
+                    device.save()
+                    ControlLog.objects.create(
+                        device=device,
+                        action='OFF',
+                        control_source='schedule_ended'
+                    )
+        
+        # Now return updated devices
         user_devices = Device.objects.filter(user=request.user)
         serializer = DeviceSerializer(user_devices, many=True)
         return Response({
