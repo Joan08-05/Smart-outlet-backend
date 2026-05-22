@@ -30,4 +30,6 @@ urlpatterns = [
     path('alerts/', views.safety_alerts, name='safety_alerts'),
     path('reset-admin/', views.reset_admin_password, name='reset_admin'),
     path('schedules/device/<int:device_id>/', views.device_schedules, name='device_schedules'),
+    path('energy/history/', views.all_energy_history, name='all_energy_history'),
+    path('control-logs/', views.control_logs_history, name='control_logs_history'),
 ]
