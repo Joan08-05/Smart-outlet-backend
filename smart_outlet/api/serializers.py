@@ -59,7 +59,8 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 class DeviceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Device
-        fields = '__all__'
+        # user is NOT included - it is set automatically from the JWT token
+        fields = ['id', 'device_name', 'location', 'firmware_version', 'status', 'installation_date']
         read_only_fields = ['installation_date']
 
 
