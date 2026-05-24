@@ -22,14 +22,33 @@ urlpatterns = [
     # POST - ESP32 sends sensor readings to backend
     path('energy/', views.receive_energy_data, name='receive_energy_data'),
 
+    # IMPORTANT - energy/history/ must come BEFORE energy/<int:device_id>/
+    # GET - mobile app retrieves ALL energy history for ALL devices
+    path('energy/history/', views.all_energy_history, name='all_energy_history'),
+
     # GET - mobile app retrieves energy history for a specific device
     path('energy/<int:device_id>/', views.energy_history, name='energy_history'),
 
     # Safety Alerts endpoint
     # GET - mobile app retrieves all safety alerts for logged in user
     path('alerts/', views.safety_alerts, name='safety_alerts'),
-    path('reset-admin/', views.reset_admin_password, name='reset_admin'),
+
+    # Scheduling endpoints
+    # GET - retrieve all schedules for logged in user
+    # POST - create a new schedule
+    path('schedules/', views.schedules, name='schedules'),
+
+    # DELETE - delete a specific schedule
+    path('schedules/<int:schedule_id>/', views.delete_schedule, name='delete_schedule'),
+
+    # GET - retrieve active schedules for a specific device (used by ESP32)
     path('schedules/device/<int:device_id>/', views.device_schedules, name='device_schedules'),
-    path('energy/history/', views.all_energy_history, name='all_energy_history'),
+
+    # Control logs history
+    # GET - retrieve full ON/OFF history for all devices of logged in user
     path('control-logs/', views.control_logs_history, name='control_logs_history'),
+
+    # Emergency admin reset endpoint - protected by secret key
+    path('reset-admin/', views.reset_admin_password, name='reset_admin'),
+
 ]
