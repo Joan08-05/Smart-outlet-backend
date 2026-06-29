@@ -1,5 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+import secrets
+from django.utils import timezone
+from datetime import timedelta
 
 class User(AbstractUser):
     phone = models.CharField(max_length=20, blank=True, null=True)
@@ -15,6 +18,13 @@ class Device(models.Model):
     firmware_version = models.CharField(max_length=50, blank=True, null=True)
     status = models.CharField(max_length=20, default='offline')
     installation_date = models.DateTimeField(auto_now_add=True)
+    
+    # ─── CLAIM CODE FIELDS ─────────────────────────────────────────
+    # Used for secure device provisioning without exposing user password
+    claim_code = models.CharField(max_length=10, blank=True, null=True, unique=True)
+    claim_code_expires_at = models.DateTimeField(blank=True, null=True)
+    is_claimed = models.BooleanField(default=False)
+    device_secret_hash = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self):
         return self.device_name

@@ -10,11 +10,14 @@ from .models import User, Device, EnergyRecord, ControlLog, SafetyAlert, Applian
 from .serializers import (UserRegistrationSerializer, DeviceSerializer, 
                           EnergyRecordSerializer, ControlLogSerializer, 
                           SafetyAlertSerializer, ApplianceScheduleSerializer)
+import secrets
+import string
+from django.contrib.auth.hashers import make_password, check_password
 
 # ─── SAFETY THRESHOLDS ─────────────────────────────────────────────
 # Based on Tanzanian electrical standards (230V AC) and project scope
-POWER_THRESHOLD = 3000    # watts - maximum safe power load
-VOLTAGE_THRESHOLD = 260   # volts - above Tanzania standard of 230V
+POWER_THRESHOLD = 3000        # watts - maximum safe power load
+VOLTAGE_THRESHOLD = 260       # volts - above Tanzania standard of 230V
 UNDERVOLTAGE_THRESHOLD = 170  # volts - below safe operating voltage
 
 
@@ -76,14 +79,14 @@ def devices(request):
     """
     GET - Returns all devices belonging to the logged in user
           Automatically checks and applies active schedules before returning
-    POST - Registers a new device and links it to the logged in user
+    POST - Registers a new device, generates a claim code for ESP32 provisioning
+           Returns claim code in response for frontend to show to user
     """
     if request.method == 'GET':
         now = timezone.now()
         user_devices = Device.objects.filter(user=request.user)
         
         for device in user_devices:
-            
             active_schedule = ApplianceSchedule.objects.filter(
                 device=device,
                 status='active'
@@ -135,8 +138,28 @@ def devices(request):
     if request.method == 'POST':
         serializer = DeviceSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Generate a 6 character claim code for ESP32 provisioning
+            claim_code = ''.join(secrets.choice(
+                string.ascii_uppercase + string.digits
+            ) for _ in range(6))
+            
+            # Set claim code expiry to 15 minutes from now
+            expires_at = timezone.now() + timezone.timedelta(minutes=15)
+            
+            # Save device with claim code
+            device = serializer.save(
+                user=request.user,
+                claim_code=claim_code,
+                claim_code_expires_at=expires_at,
+                is_claimed=False
+            )
+            
+            # Return device data plus claim code for frontend to show user
+            response_data = serializer.data
+            response_data['claim_code'] = claim_code
+            response_data['claim_code_expires_in'] = '15 minutes'
+            
+            return Response(response_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -176,6 +199,111 @@ def control_device(request, device_id):
     return Response({'message': f'Device turned {action}', 'status': action})
 
 
+# ─── DEVICE CLAIMING ───────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def claim_device(request):
+    """
+    ESP32 exchanges a one-time claim code for a permanent device secret.
+    No authentication required - device has no token yet.
+    Accepts: claim_code
+    Returns: device_id and device_secret (shown only once - never retrievable again)
+    Errors: 404 not found, 409 already claimed, 410 expired
+    """
+    claim_code = request.data.get('claim_code', '').strip().upper()
+    
+    if not claim_code:
+        return Response(
+            {'error': 'claim_code is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        device = Device.objects.get(claim_code=claim_code)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Invalid claim code'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Check if already claimed
+    if device.is_claimed:
+        return Response(
+            {'error': 'Device already claimed'},
+            status=status.HTTP_409_CONFLICT
+        )
+    
+    # Check if expired
+    if device.claim_code_expires_at and timezone.now() > device.claim_code_expires_at:
+        return Response(
+            {'error': 'Claim code has expired. Please generate a new one from the app.'},
+            status=status.HTTP_410_GONE
+        )
+    
+    # Generate permanent device secret
+    device_secret = secrets.token_urlsafe(32)
+    
+    # Store hashed secret, mark as claimed, clear claim code
+    device.device_secret_hash = make_password(device_secret)
+    device.is_claimed = True
+    device.claim_code = None
+    device.claim_code_expires_at = None
+    device.save()
+    
+    # Return plaintext secret once - never retrievable again
+    return Response({
+        'device_id': device.id,
+        'device_secret': device_secret
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def device_auth(request):
+    """
+    ESP32 authenticates using device_id and device_secret.
+    No user username/password needed - more secure for IoT devices.
+    Returns JWT tokens scoped to the device owner's account.
+    The device_secret is verified against the stored hash.
+    """
+    device_id = request.data.get('device_id')
+    device_secret = request.data.get('device_secret', '')
+    
+    if not device_id or not device_secret:
+        return Response(
+            {'error': 'device_id and device_secret are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        device = Device.objects.get(id=device_id, is_claimed=True)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Device not found or not claimed'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    # Verify device secret against stored hash
+    if not device.device_secret_hash or not check_password(device_secret, device.device_secret_hash):
+        return Response(
+            {'error': 'Invalid device secret'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    # Issue JWT tokens scoped to the device owner
+    refresh = RefreshToken.for_user(device.user)
+    
+    # Add device info to token
+    refresh['device_id'] = device.id
+    refresh['scope'] = 'device'
+    
+    return Response({
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+    })
+
+
 # ─── ENERGY DATA ───────────────────────────────────────────────────
 
 @api_view(['POST'])
@@ -186,9 +314,10 @@ def receive_energy_data(request):
     Accepts: device, voltage, current, power, energy_kwh
     Automatically checks safety thresholds after saving:
     - OVERLOAD: power exceeds 3000W
-    - OVERVOLTAGE: voltage exceeds 260V
+    - OVERVOLTAGE: voltage exceeds 260V  
     - UNDERVOLTAGE: voltage drops below 170V
-    If any threshold is exceeded, a SafetyAlert is created and returned.
+    If any threshold is exceeded, a SafetyAlert is created.
+    Alerts are returned as simple strings so ESP32 can read them easily.
     """
     serializer = EnergyRecordSerializer(data=request.data)
     if serializer.is_valid():
@@ -205,12 +334,8 @@ def receive_energy_data(request):
                 threshold_value=POWER_THRESHOLD,
                 action_taken='Alert sent to user'
             )
-            alerts.append({
-                'type': 'OVERLOAD',
-                'message': f'Power {energy_record.power}W exceeds safe limit of {POWER_THRESHOLD}W',
-                'measured_value': energy_record.power,
-                'threshold': POWER_THRESHOLD
-            })
+            # Simple string format so ESP32 can read with alert.as<String>()
+            alerts.append(f'OVERLOAD: Power {energy_record.power}W exceeds {POWER_THRESHOLD}W')
         
         # Check for overvoltage - voltage above Tanzania safe range
         if energy_record.voltage > VOLTAGE_THRESHOLD:
@@ -221,12 +346,7 @@ def receive_energy_data(request):
                 threshold_value=VOLTAGE_THRESHOLD,
                 action_taken='Alert sent to user'
             )
-            alerts.append({
-                'type': 'OVERVOLTAGE',
-                'message': f'Voltage {energy_record.voltage}V exceeds safe limit of {VOLTAGE_THRESHOLD}V',
-                'measured_value': energy_record.voltage,
-                'threshold': VOLTAGE_THRESHOLD
-            })
+            alerts.append(f'OVERVOLTAGE: Voltage {energy_record.voltage}V exceeds {VOLTAGE_THRESHOLD}V')
         
         # Check for undervoltage - voltage below safe operating range
         if energy_record.voltage < UNDERVOLTAGE_THRESHOLD and energy_record.voltage > 0:
@@ -237,12 +357,7 @@ def receive_energy_data(request):
                 threshold_value=UNDERVOLTAGE_THRESHOLD,
                 action_taken='Alert sent to user'
             )
-            alerts.append({
-                'type': 'UNDERVOLTAGE',
-                'message': f'Voltage {energy_record.voltage}V is below safe minimum of {UNDERVOLTAGE_THRESHOLD}V',
-                'measured_value': energy_record.voltage,
-                'threshold': UNDERVOLTAGE_THRESHOLD
-            })
+            alerts.append(f'UNDERVOLTAGE: Voltage {energy_record.voltage}V below {UNDERVOLTAGE_THRESHOLD}V')
         
         response_data = {'message': 'Energy data saved'}
         if alerts:
@@ -300,7 +415,7 @@ def get_pending_command(request, device_id):
     """
     Polled by ESP32 every few seconds.
     Checks active schedules first - both start_time and end_time are optional.
-    If no start_time - schedule is immediately active from now.
+    If no start_time - schedule is immediately active.
     If no end_time - schedule runs indefinitely.
     Otherwise returns the manually set device status.
     """

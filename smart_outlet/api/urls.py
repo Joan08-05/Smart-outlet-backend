@@ -2,14 +2,20 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # User Authentication endpoints
+    # ─── USER AUTHENTICATION ───────────────────────────────────────
     # Anyone can access these - no token required
     path('auth/register/', views.register, name='register'),
     path('auth/login/', views.login, name='login'),
 
-    # Device Management endpoints
+    # ─── DEVICE CLAIMING ───────────────────────────────────────────
+    # ESP32 provisioning - no token required
+    # IMPORTANT: these must come BEFORE devices/<int:device_id>/ paths
+    path('devices/claim/', views.claim_device, name='claim_device'),
+    path('devices/auth/', views.device_auth, name='device_auth'),
+
+    # ─── DEVICE MANAGEMENT ─────────────────────────────────────────
     # GET - retrieve all devices for logged in user
-    # POST - register a new device
+    # POST - register a new device and generate claim code
     path('devices/', views.devices, name='devices'),
 
     # Send ON/OFF command to a specific device (used by mobile app)
@@ -18,7 +24,7 @@ urlpatterns = [
     # ESP32 polls this endpoint to check for pending commands
     path('devices/<int:device_id>/command/', views.get_pending_command, name='get_pending_command'),
 
-    # Energy Data endpoints
+    # ─── ENERGY DATA ───────────────────────────────────────────────
     # POST - ESP32 sends sensor readings to backend
     path('energy/', views.receive_energy_data, name='receive_energy_data'),
 
@@ -29,11 +35,11 @@ urlpatterns = [
     # GET - mobile app retrieves energy history for a specific device
     path('energy/<int:device_id>/', views.energy_history, name='energy_history'),
 
-    # Safety Alerts endpoint
+    # ─── SAFETY ALERTS ─────────────────────────────────────────────
     # GET - mobile app retrieves all safety alerts for logged in user
     path('alerts/', views.safety_alerts, name='safety_alerts'),
 
-    # Scheduling endpoints
+    # ─── SCHEDULING ────────────────────────────────────────────────
     # GET - retrieve all schedules for logged in user
     # POST - create a new schedule
     path('schedules/', views.schedules, name='schedules'),
@@ -44,11 +50,11 @@ urlpatterns = [
     # GET - retrieve active schedules for a specific device (used by ESP32)
     path('schedules/device/<int:device_id>/', views.device_schedules, name='device_schedules'),
 
-    # Control logs history
+    # ─── HISTORY ───────────────────────────────────────────────────
     # GET - retrieve full ON/OFF history for all devices of logged in user
     path('control-logs/', views.control_logs_history, name='control_logs_history'),
 
+    # ─── ADMIN ─────────────────────────────────────────────────────
     # Emergency admin reset endpoint - protected by secret key
     path('reset-admin/', views.reset_admin_password, name='reset_admin'),
-
 ]
