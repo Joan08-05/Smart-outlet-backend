@@ -56,7 +56,7 @@ class SafetyAlert(models.Model):
 
 class ApplianceSchedule(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    start_time = models.DateTimeField()
+    start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
     repeat_pattern = models.CharField(max_length=50, blank=True, null=True)
     status = models.CharField(max_length=20, default='active')

@@ -12,9 +12,10 @@ from .serializers import (UserRegistrationSerializer, DeviceSerializer,
                           SafetyAlertSerializer, ApplianceScheduleSerializer)
 
 # ─── SAFETY THRESHOLDS ─────────────────────────────────────────────
-# Based on Tanzanian electrical standards (230V AC) and project scope (max 3000W)
-POWER_THRESHOLD = 3000   # watts - maximum safe power load
-VOLTAGE_THRESHOLD = 260  # volts - above Tanzania standard of 230V
+# Based on Tanzanian electrical standards (230V AC) and project scope
+POWER_THRESHOLD = 3000    # watts - maximum safe power load
+VOLTAGE_THRESHOLD = 260   # volts - above Tanzania standard of 230V
+UNDERVOLTAGE_THRESHOLD = 170  # volts - below safe operating voltage
 
 
 # ─── USER AUTHENTICATION ───────────────────────────────────────────
@@ -26,7 +27,7 @@ def register(request):
     Registers a new user.
     Accepts: first_name, last_name, username, email, password, phone
     Returns: success message
-    Security: password is automatically hashed before saving - never stored as plain text
+    Security: password is automatically hashed before saving
     """
     serializer = UserRegistrationSerializer(data=request.data)
     if serializer.is_valid():
@@ -53,7 +54,6 @@ def login(request):
     user = authenticate(username=username, password=password)
     
     if user:
-        # Record last login time in Tanzania timezone
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
         
@@ -82,20 +82,18 @@ def devices(request):
         now = timezone.now()
         user_devices = Device.objects.filter(user=request.user)
         
-        # Check schedules for each device and update status if needed
         for device in user_devices:
             
-            # Check if there's an active schedule right now
             active_schedule = ApplianceSchedule.objects.filter(
                 device=device,
-                status='active',
-                start_time__lte=now
+                status='active'
+            ).filter(
+                Q(start_time__isnull=True) | Q(start_time__lte=now)
             ).filter(
                 Q(end_time__isnull=True) | Q(end_time__gte=now)
             ).first()
             
             if active_schedule:
-                # Schedule is active - device should be ON
                 if device.status != 'ON':
                     device.status = 'ON'
                     device.save()
@@ -105,8 +103,6 @@ def devices(request):
                         control_source='schedule'
                     )
             else:
-                # No active schedule - check if device was turned ON by a schedule
-                # If so turn it OFF automatically
                 was_scheduled_on = ControlLog.objects.filter(
                     device=device,
                     action='ON',
@@ -119,7 +115,6 @@ def devices(request):
                     control_source='mobile_app'
                 ).order_by('-timestamp').first()
                 
-                # Only auto turn OFF if last ON was from schedule not from manual control
                 if device.status == 'ON' and was_scheduled_on:
                     if not was_manually_turned_on or was_scheduled_on.timestamp > was_manually_turned_on.timestamp:
                         device.status = 'OFF'
@@ -130,7 +125,6 @@ def devices(request):
                             control_source='schedule_ended'
                         )
         
-        # Return updated devices
         user_devices = Device.objects.filter(user=request.user)
         serializer = DeviceSerializer(user_devices, many=True)
         return Response({
@@ -152,7 +146,6 @@ def control_device(request, device_id):
     """
     Receives ON/OFF command from the mobile application.
     Stores the command and logs the control action.
-    The ESP32 will poll the get_pending_command endpoint to retrieve this status.
     Security: users can only control their own devices
     """
     try:
@@ -190,9 +183,12 @@ def control_device(request, device_id):
 def receive_energy_data(request):
     """
     Receives sensor readings from the ESP32 microcontroller.
-    Accepts: device_id, voltage, current, power, energy_kwh
-    After saving, automatically checks safety thresholds.
-    If thresholds are exceeded, a safety alert is created and returned.
+    Accepts: device, voltage, current, power, energy_kwh
+    Automatically checks safety thresholds after saving:
+    - OVERLOAD: power exceeds 3000W
+    - OVERVOLTAGE: voltage exceeds 260V
+    - UNDERVOLTAGE: voltage drops below 170V
+    If any threshold is exceeded, a SafetyAlert is created and returned.
     """
     serializer = EnergyRecordSerializer(data=request.data)
     if serializer.is_valid():
@@ -200,6 +196,7 @@ def receive_energy_data(request):
         
         alerts = []
         
+        # Check for overload - power exceeds maximum safe load
         if energy_record.power > POWER_THRESHOLD:
             SafetyAlert.objects.create(
                 device=energy_record.device,
@@ -208,8 +205,14 @@ def receive_energy_data(request):
                 threshold_value=POWER_THRESHOLD,
                 action_taken='Alert sent to user'
             )
-            alerts.append('OVERLOAD detected')
+            alerts.append({
+                'type': 'OVERLOAD',
+                'message': f'Power {energy_record.power}W exceeds safe limit of {POWER_THRESHOLD}W',
+                'measured_value': energy_record.power,
+                'threshold': POWER_THRESHOLD
+            })
         
+        # Check for overvoltage - voltage above Tanzania safe range
         if energy_record.voltage > VOLTAGE_THRESHOLD:
             SafetyAlert.objects.create(
                 device=energy_record.device,
@@ -218,11 +221,33 @@ def receive_energy_data(request):
                 threshold_value=VOLTAGE_THRESHOLD,
                 action_taken='Alert sent to user'
             )
-            alerts.append('OVERVOLTAGE detected')
+            alerts.append({
+                'type': 'OVERVOLTAGE',
+                'message': f'Voltage {energy_record.voltage}V exceeds safe limit of {VOLTAGE_THRESHOLD}V',
+                'measured_value': energy_record.voltage,
+                'threshold': VOLTAGE_THRESHOLD
+            })
+        
+        # Check for undervoltage - voltage below safe operating range
+        if energy_record.voltage < UNDERVOLTAGE_THRESHOLD and energy_record.voltage > 0:
+            SafetyAlert.objects.create(
+                device=energy_record.device,
+                alert_type='UNDERVOLTAGE',
+                measured_value=energy_record.voltage,
+                threshold_value=UNDERVOLTAGE_THRESHOLD,
+                action_taken='Alert sent to user'
+            )
+            alerts.append({
+                'type': 'UNDERVOLTAGE',
+                'message': f'Voltage {energy_record.voltage}V is below safe minimum of {UNDERVOLTAGE_THRESHOLD}V',
+                'measured_value': energy_record.voltage,
+                'threshold': UNDERVOLTAGE_THRESHOLD
+            })
         
         response_data = {'message': 'Energy data saved'}
         if alerts:
             response_data['alerts'] = alerts
+            response_data['alert_count'] = len(alerts)
         return Response(response_data, status=status.HTTP_201_CREATED)
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -257,6 +282,7 @@ def safety_alerts(request):
     """
     Returns all safety alerts for all devices belonging to the logged in user.
     Results are ordered by most recent first.
+    Alert types: OVERLOAD, OVERVOLTAGE, UNDERVOLTAGE
     """
     user_devices = Device.objects.filter(user=request.user)
     alerts = SafetyAlert.objects.filter(
@@ -273,10 +299,9 @@ def safety_alerts(request):
 def get_pending_command(request, device_id):
     """
     Polled by ESP32 every few seconds.
-    Checks active schedules first - if current time falls within a schedule,
-    returns the scheduled status and updates the device.
-    Handles schedules with no end time (e.g. fridge - runs indefinitely).
-    Handles schedules with end time (e.g. fan - runs until set time).
+    Checks active schedules first - both start_time and end_time are optional.
+    If no start_time - schedule is immediately active from now.
+    If no end_time - schedule runs indefinitely.
     Otherwise returns the manually set device status.
     """
     try:
@@ -289,11 +314,12 @@ def get_pending_command(request, device_id):
 
     now = timezone.now()
 
-    # Check if current time falls within any active schedule
+    # Check active schedules - handle optional start_time and end_time
     active_schedule = ApplianceSchedule.objects.filter(
         device=device,
-        status='active',
-        start_time__lte=now
+        status='active'
+    ).filter(
+        Q(start_time__isnull=True) | Q(start_time__lte=now)
     ).filter(
         Q(end_time__isnull=True) | Q(end_time__gte=now)
     ).first()
@@ -316,7 +342,7 @@ def get_pending_command(request, device_id):
             'schedule_ends': active_schedule.end_time
         })
 
-    # No active schedule - check if device was turned ON by schedule
+    # No active schedule - check if device was last turned ON by a schedule
     was_scheduled_on = ControlLog.objects.filter(
         device=device,
         action='ON',
@@ -329,7 +355,6 @@ def get_pending_command(request, device_id):
         control_source='mobile_app'
     ).order_by('-timestamp').first()
 
-    # Only auto turn OFF if last ON was from schedule not manual control
     if device.status == 'ON' and was_scheduled_on:
         if not was_manually_turned_on or was_scheduled_on.timestamp > was_manually_turned_on.timestamp:
             device.status = 'OFF'
@@ -383,7 +408,11 @@ def schedules(request):
     """
     GET - Returns all schedules for devices belonging to the logged in user
     POST - Creates a new schedule for a device
-    end_time is optional - leave it out for devices that run indefinitely (e.g. fridge)
+    Both start_time and end_time are optional:
+    - No start_time: schedule is active immediately
+    - No end_time: schedule runs indefinitely (e.g. fridge)
+    - Both provided: schedule runs between the two times (e.g. fan)
+    - Only end_time: device turns OFF at that time
     """
     if request.method == 'GET':
         user_devices = Device.objects.filter(user=request.user)
@@ -421,7 +450,7 @@ def delete_schedule(request, schedule_id):
 def device_schedules(request, device_id):
     """
     GET - Returns active schedules for a specific device
-    Used by ESP32 to check if any scheduled ON/OFF should be executed
+    Used by ESP32 to check scheduled operations
     """
     try:
         device = Device.objects.get(id=device_id)
