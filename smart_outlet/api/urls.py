@@ -38,6 +38,9 @@ urlpatterns = [
     # ─── SAFETY ALERTS ─────────────────────────────────────────────
     # GET - mobile app retrieves all safety alerts for logged in user
     path('alerts/', views.safety_alerts, name='safety_alerts'),
+    
+    # POST - ESP32 reports a safety alert it has already detected
+    path('alerts/report/', views.report_safety_alert, name='report_safety_alert'),
 
     # ─── SCHEDULING ────────────────────────────────────────────────
     # GET - retrieve all schedules for logged in user
