@@ -283,6 +283,40 @@ def device_auth(request):
         'refresh': str(refresh),
     })
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def regenerate_claim_code(request, device_id):
+    """
+    Generates a new claim code for a device whose previous code expired
+    or was lost before the ESP32 could claim it.
+    Only works if the device has not already been claimed.
+    """
+    try:
+        device = Device.objects.get(id=device_id, user=request.user)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Device not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    if device.is_claimed:
+        return Response(
+            {'error': 'Device is already claimed. Cannot regenerate claim code.'},
+            status=status.HTTP_409_CONFLICT
+        )
+    
+    new_claim_code = ''.join(secrets.choice(
+        string.ascii_uppercase + string.digits
+    ) for _ in range(6))
+    
+    device.claim_code = new_claim_code
+    device.claim_code_expires_at = timezone.now() + timezone.timedelta(minutes=15)
+    device.save()
+    
+    return Response({
+        'claim_code': new_claim_code,
+        'claim_code_expires_in': '15 minutes'
+    })
 
 # ─── ENERGY DATA ───────────────────────────────────────────────────
 

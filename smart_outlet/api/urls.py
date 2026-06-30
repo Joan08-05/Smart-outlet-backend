@@ -12,6 +12,7 @@ urlpatterns = [
     # IMPORTANT: these must come BEFORE devices/<int:device_id>/ paths
     path('devices/claim/', views.claim_device, name='claim_device'),
     path('devices/auth/', views.device_auth, name='device_auth'),
+    path('devices/<int:device_id>/regenerate-claim/', views.regenerate_claim_code, name='regenerate_claim_code'),
 
     # ─── DEVICE MANAGEMENT ─────────────────────────────────────────
     # GET - retrieve all devices for logged in user
