@@ -89,3 +89,8 @@ class ApplianceScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ApplianceSchedule
         fields = '__all__'
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'phone', 'location', 'first_name', 'last_name']

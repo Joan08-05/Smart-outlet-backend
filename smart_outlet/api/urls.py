@@ -62,4 +62,13 @@ urlpatterns = [
     # ─── ADMIN ─────────────────────────────────────────────────────
     # Emergency admin reset endpoint - protected by secret key
     path('reset-admin/', views.reset_admin_password, name='reset_admin'),
+    # ─── USER PROFILE ──────────────────────────────────────────────────
+    # GET - get logged in user profile
+    # PATCH - update logged in user profile
+    path('users/profile/', views.user_profile, name='user_profile'),
+
+    # ─── DEVICE DETAIL ─────────────────────────────────────────────────
+    # DELETE - permanently delete a device
+    # PATCH - rename a device
+    path('devices/<int:device_id>/', views.device_detail, name='device_detail'),
 ]

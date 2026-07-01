@@ -9,7 +9,8 @@ from django.db.models import Q
 from .models import User, Device, EnergyRecord, ControlLog, SafetyAlert, ApplianceSchedule
 from .serializers import (UserRegistrationSerializer, DeviceSerializer,
                           EnergyRecordSerializer, ControlLogSerializer,
-                          SafetyAlertSerializer, ApplianceScheduleSerializer)
+                          SafetyAlertSerializer, ApplianceScheduleSerializer,
+                          UserProfileSerializer)
 import secrets
 import string
 from django.contrib.auth.hashers import make_password, check_password
@@ -651,3 +652,74 @@ def control_logs_history(request):
         'total_logs': logs.count(),
         'control_logs': serializer.data
     })
+
+# ─── USER PROFILE ──────────────────────────────────────────────────
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def user_profile(request):
+    """
+    GET - Returns the logged in user's profile details
+    PATCH - Updates the logged in user's profile
+    Accepts: username, email, phone, location
+    User is identified from JWT token - no ID needed in URL
+    """
+    if request.method == 'GET':
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data)
+
+    if request.method == 'PATCH':
+        serializer = UserProfileSerializer(
+            request.user,
+            data=request.data,
+            partial=True  # Allow partial updates - not all fields required
+        )
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'message': 'Profile updated successfully',
+                'username': request.user.username,
+                'email': request.user.email,
+                'phone': request.user.phone,
+                'location': request.user.location,
+                'first_name': request.user.first_name,
+                'last_name': request.user.last_name,
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ─── DELETE AND RENAME DEVICE ──────────────────────────────────────
+
+@api_view(['DELETE', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def device_detail(request, device_id):
+    """
+    DELETE - Permanently removes a device and all its associated data
+             Security: users can only delete their own devices
+    PATCH - Updates device_name only, keeps everything else unchanged
+            Security: users can only rename their own devices
+    """
+    try:
+        device = Device.objects.get(id=device_id, user=request.user)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Device not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    if request.method == 'DELETE':
+        device.delete()
+        return Response({'message': 'Device deleted successfully'})
+
+    if request.method == 'PATCH':
+        # Only allow updating device_name
+        device_name = request.data.get('device_name')
+        if not device_name:
+            return Response(
+                {'error': 'device_name is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        device.device_name = device_name
+        device.save()
+        serializer = DeviceSerializer(device)
+        return Response(serializer.data)
