@@ -7,8 +7,8 @@ from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.db.models import Q
 from .models import User, Device, EnergyRecord, ControlLog, SafetyAlert, ApplianceSchedule
-from .serializers import (UserRegistrationSerializer, DeviceSerializer, 
-                          EnergyRecordSerializer, ControlLogSerializer, 
+from .serializers import (UserRegistrationSerializer, DeviceSerializer,
+                          EnergyRecordSerializer, ControlLogSerializer,
                           SafetyAlertSerializer, ApplianceScheduleSerializer)
 import secrets
 import string
@@ -30,7 +30,7 @@ def register(request):
     if serializer.is_valid():
         serializer.save()
         return Response(
-            {'message': 'User registered successfully'}, 
+            {'message': 'User registered successfully'},
             status=status.HTTP_201_CREATED
         )
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -47,20 +47,20 @@ def login(request):
     """
     username = request.data.get('username')
     password = request.data.get('password')
-    
+
     user = authenticate(username=username, password=password)
-    
+
     if user:
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
-        
+
         refresh = RefreshToken.for_user(user)
         return Response({
             'refresh': str(refresh),
             'access': str(refresh.access_token),
         })
     return Response(
-        {'error': 'Invalid credentials'}, 
+        {'error': 'Invalid credentials'},
         status=status.HTTP_401_UNAUTHORIZED
     )
 
@@ -72,14 +72,27 @@ def login(request):
 def devices(request):
     """
     GET - Returns all devices belonging to the logged in user
-          Automatically checks and applies active schedules before returning
-    POST - Registers a new device, generates a claim code for ESP32 provisioning
+          Auto-deletes expired unclaimed devices before returning
+          Automatically checks and applies active schedules
+    POST - Registers a new device, generates a 6-char claim code for ESP32
+           Claim code expires in 15 minutes
            Returns claim code in response for frontend to show to user
     """
     if request.method == 'GET':
         now = timezone.now()
+
+        # Auto-delete expired unclaimed devices
+        # If claim code expired and ESP32 never claimed the device, remove it
+        Device.objects.filter(
+            user=request.user,
+            is_claimed=False,
+            claim_code_expires_at__lt=now
+        ).delete()
+
+        # Now get remaining valid devices
         user_devices = Device.objects.filter(user=request.user)
-        
+
+        # Check and apply active schedules for each device
         for device in user_devices:
             active_schedule = ApplianceSchedule.objects.filter(
                 device=device,
@@ -89,7 +102,7 @@ def devices(request):
             ).filter(
                 Q(end_time__isnull=True) | Q(end_time__gte=now)
             ).first()
-            
+
             if active_schedule:
                 if device.status != 'ON':
                     device.status = 'ON'
@@ -105,13 +118,13 @@ def devices(request):
                     action='ON',
                     control_source='schedule'
                 ).order_by('-timestamp').first()
-                
+
                 was_manually_turned_on = ControlLog.objects.filter(
                     device=device,
                     action='ON',
                     control_source='mobile_app'
                 ).order_by('-timestamp').first()
-                
+
                 if device.status == 'ON' and was_scheduled_on:
                     if not was_manually_turned_on or was_scheduled_on.timestamp > was_manually_turned_on.timestamp:
                         device.status = 'OFF'
@@ -121,34 +134,39 @@ def devices(request):
                             action='OFF',
                             control_source='schedule_ended'
                         )
-        
+
+        # Refresh queryset after schedule updates
         user_devices = Device.objects.filter(user=request.user)
         serializer = DeviceSerializer(user_devices, many=True)
         return Response({
             'total_devices': user_devices.count(),
             'devices': serializer.data
         })
-    
+
     if request.method == 'POST':
         serializer = DeviceSerializer(data=request.data)
         if serializer.is_valid():
+            # Generate a 6 character claim code for ESP32 provisioning
             claim_code = ''.join(secrets.choice(
                 string.ascii_uppercase + string.digits
             ) for _ in range(6))
-            
+
+            # Set claim code expiry to 15 minutes from now
             expires_at = timezone.now() + timezone.timedelta(minutes=15)
-            
+
+            # Save device with claim code
             device = serializer.save(
                 user=request.user,
                 claim_code=claim_code,
                 claim_code_expires_at=expires_at,
                 is_claimed=False
             )
-            
+
+            # Return device data plus claim code for frontend to show user
             response_data = serializer.data
             response_data['claim_code'] = claim_code
             response_data['claim_code_expires_in'] = '15 minutes'
-            
+
             return Response(response_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -165,28 +183,63 @@ def control_device(request, device_id):
         device = Device.objects.get(id=device_id, user=request.user)
     except Device.DoesNotExist:
         return Response(
-            {'error': 'Device not found'}, 
+            {'error': 'Device not found'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
+
     action = request.data.get('action')
-    
+
     if action not in ['ON', 'OFF']:
         return Response(
-            {'error': 'Action must be ON or OFF'}, 
+            {'error': 'Action must be ON or OFF'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     device.status = action
     device.save()
-    
+
     ControlLog.objects.create(
         device=device,
         action=action,
         control_source='mobile_app'
     )
-    
+
     return Response({'message': f'Device turned {action}', 'status': action})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def regenerate_claim_code(request, device_id):
+    """
+    Generates a new claim code for a device whose previous code expired.
+    Only works if the device has not already been claimed by an ESP32.
+    """
+    try:
+        device = Device.objects.get(id=device_id, user=request.user)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Device not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    if device.is_claimed:
+        return Response(
+            {'error': 'Device is already claimed. Cannot regenerate claim code.'},
+            status=status.HTTP_409_CONFLICT
+        )
+
+    new_claim_code = ''.join(secrets.choice(
+        string.ascii_uppercase + string.digits
+    ) for _ in range(6))
+
+    device.claim_code = new_claim_code
+    device.claim_code_expires_at = timezone.now() + timezone.timedelta(minutes=15)
+    device.save()
+
+    return Response({
+        'claim_code': new_claim_code,
+        'claim_code_expires_in': '15 minutes'
+    })
 
 
 # ─── DEVICE CLAIMING ───────────────────────────────────────────────
@@ -198,17 +251,17 @@ def claim_device(request):
     ESP32 exchanges a one-time claim code for a permanent device secret.
     No authentication required - device has no token yet.
     Accepts: claim_code
-    Returns: device_id and device_secret (shown only once - never retrievable again)
+    Returns: device_id and device_secret (shown only once)
     Errors: 404 not found, 409 already claimed, 410 expired
     """
     claim_code = request.data.get('claim_code', '').strip().upper()
-    
+
     if not claim_code:
         return Response(
             {'error': 'claim_code is required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
         device = Device.objects.get(claim_code=claim_code)
     except Device.DoesNotExist:
@@ -216,27 +269,29 @@ def claim_device(request):
             {'error': 'Invalid claim code'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
+
     if device.is_claimed:
         return Response(
             {'error': 'Device already claimed'},
             status=status.HTTP_409_CONFLICT
         )
-    
+
     if device.claim_code_expires_at and timezone.now() > device.claim_code_expires_at:
         return Response(
-            {'error': 'Claim code has expired. Please generate a new one from the app.'},
+            {'error': 'Claim code has expired. Please regenerate from the app.'},
             status=status.HTTP_410_GONE
         )
-    
+
+    # Generate permanent device secret
     device_secret = secrets.token_urlsafe(32)
-    
+
+    # Store hashed secret, mark as claimed, clear claim code
     device.device_secret_hash = make_password(device_secret)
     device.is_claimed = True
     device.claim_code = None
     device.claim_code_expires_at = None
     device.save()
-    
+
     return Response({
         'device_id': device.id,
         'device_secret': device_secret
@@ -253,13 +308,13 @@ def device_auth(request):
     """
     device_id = request.data.get('device_id')
     device_secret = request.data.get('device_secret', '')
-    
+
     if not device_id or not device_secret:
         return Response(
             {'error': 'device_id and device_secret are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
         device = Device.objects.get(id=device_id, is_claimed=True)
     except Device.DoesNotExist:
@@ -267,56 +322,22 @@ def device_auth(request):
             {'error': 'Device not found or not claimed'},
             status=status.HTTP_401_UNAUTHORIZED
         )
-    
+
     if not device.device_secret_hash or not check_password(device_secret, device.device_secret_hash):
         return Response(
             {'error': 'Invalid device secret'},
             status=status.HTTP_401_UNAUTHORIZED
         )
-    
+
     refresh = RefreshToken.for_user(device.user)
     refresh['device_id'] = device.id
     refresh['scope'] = 'device'
-    
+
     return Response({
         'access': str(refresh.access_token),
         'refresh': str(refresh),
     })
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def regenerate_claim_code(request, device_id):
-    """
-    Generates a new claim code for a device whose previous code expired
-    or was lost before the ESP32 could claim it.
-    Only works if the device has not already been claimed.
-    """
-    try:
-        device = Device.objects.get(id=device_id, user=request.user)
-    except Device.DoesNotExist:
-        return Response(
-            {'error': 'Device not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
-    if device.is_claimed:
-        return Response(
-            {'error': 'Device is already claimed. Cannot regenerate claim code.'},
-            status=status.HTTP_409_CONFLICT
-        )
-    
-    new_claim_code = ''.join(secrets.choice(
-        string.ascii_uppercase + string.digits
-    ) for _ in range(6))
-    
-    device.claim_code = new_claim_code
-    device.claim_code_expires_at = timezone.now() + timezone.timedelta(minutes=15)
-    device.save()
-    
-    return Response({
-        'claim_code': new_claim_code,
-        'claim_code_expires_in': '15 minutes'
-    })
 
 # ─── ENERGY DATA ───────────────────────────────────────────────────
 
@@ -326,17 +347,14 @@ def receive_energy_data(request):
     """
     Receives sensor readings from the ESP32 microcontroller.
     Accepts: device, voltage, current, power, energy_kwh
-    Simply stores the reading - does NOT perform safety threshold checking.
-    Safety detection is handled entirely by the ESP32's own intelligent
-    control logic. When the ESP32 detects a fault, it reports it directly
-    via POST /api/alerts/report/ instead of relying on the backend to
-    re-analyze raw sensor data.
+    Simply stores the reading - safety detection is handled by ESP32
+    firmware. ESP32 reports detected faults via POST /api/alerts/report/
     """
     serializer = EnergyRecordSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
         return Response({'message': 'Energy data saved'}, status=status.HTTP_201_CREATED)
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -352,10 +370,10 @@ def energy_history(request, device_id):
         device = Device.objects.get(id=device_id, user=request.user)
     except Device.DoesNotExist:
         return Response(
-            {'error': 'Device not found'}, 
+            {'error': 'Device not found'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
+
     records = EnergyRecord.objects.filter(device=device).order_by('-timestamp')
     serializer = EnergyRecordSerializer(records, many=True)
     return Response(serializer.data)
@@ -368,9 +386,9 @@ def energy_history(request, device_id):
 def safety_alerts(request):
     """
     Returns all safety alerts for all devices belonging to the logged in user.
-    Results are ordered by most recent first.
     Alerts are created by the ESP32 reporting its own detected faults
     via POST /api/alerts/report/
+    Results are ordered by most recent first.
     """
     user_devices = Device.objects.filter(user=request.user)
     alerts = SafetyAlert.objects.filter(
@@ -384,24 +402,24 @@ def safety_alerts(request):
 @permission_classes([IsAuthenticated])
 def report_safety_alert(request):
     """
-    ESP32 reports a safety event it has already detected and acted on
-    using its own Intelligent Control Logic Module.
-    The ESP32 makes the safety decision - this endpoint simply logs
-    what happened so the user can see it in the mobile application.
+    ESP32 reports a safety event it has already detected and acted on.
+    The ESP32 makes the safety decision - this endpoint simply logs it
+    so the user can see it in the mobile application.
     Accepts: device, alert_type, measured_value, threshold_value, action_taken
+    alert_type options: OVERLOAD, OVERVOLTAGE, UNDERVOLTAGE
     """
     device_id = request.data.get('device')
     alert_type = request.data.get('alert_type')
     measured_value = request.data.get('measured_value')
     threshold_value = request.data.get('threshold_value')
     action_taken = request.data.get('action_taken', 'Relay disconnected')
-    
+
     if not device_id or not alert_type or measured_value is None or threshold_value is None:
         return Response(
             {'error': 'device, alert_type, measured_value, and threshold_value are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
         device = Device.objects.get(id=device_id)
     except Device.DoesNotExist:
@@ -409,7 +427,7 @@ def report_safety_alert(request):
             {'error': 'Device not found'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
+
     alert = SafetyAlert.objects.create(
         device=device,
         alert_type=alert_type,
@@ -417,7 +435,7 @@ def report_safety_alert(request):
         threshold_value=threshold_value,
         action_taken=action_taken
     )
-    
+
     return Response({
         'message': 'Safety alert logged successfully',
         'alert_id': alert.id
@@ -435,6 +453,7 @@ def get_pending_command(request, device_id):
     If no start_time - schedule is immediately active.
     If no end_time - schedule runs indefinitely.
     Otherwise returns the manually set device status.
+    repeat_pattern values: daily, weekly, once, or blank for no repeat
     """
     try:
         device = Device.objects.get(id=device_id)
@@ -512,10 +531,10 @@ def reset_admin_password(request):
     """
     from django.contrib.auth import get_user_model
     User = get_user_model()
-    
+
     if request.data.get('secret') != 'joan2026smart':
         return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
-    
+
     if not User.objects.filter(is_superuser=True).exists():
         User.objects.create_superuser(
             username='admin',
@@ -523,7 +542,7 @@ def reset_admin_password(request):
             password='SmartAdmin2026!'
         )
         return Response({'message': 'Superuser created'})
-    
+
     user = User.objects.get(username='admin')
     user.set_password('SmartAdmin2026!')
     user.save()
@@ -538,14 +557,15 @@ def schedules(request):
     """
     GET - Returns all schedules for devices belonging to the logged in user
     POST - Creates a new schedule for a device
-    Both start_time and end_time are optional
+    Both start_time and end_time are optional.
+    repeat_pattern options: daily, weekly, once, or leave blank for no repeat
     """
     if request.method == 'GET':
         user_devices = Device.objects.filter(user=request.user)
         user_schedules = ApplianceSchedule.objects.filter(device__in=user_devices)
         serializer = ApplianceScheduleSerializer(user_schedules, many=True)
         return Response(serializer.data)
-    
+
     if request.method == 'POST':
         serializer = ApplianceScheduleSerializer(data=request.data)
         if serializer.is_valid():
@@ -566,7 +586,7 @@ def delete_schedule(request, schedule_id):
         schedule = ApplianceSchedule.objects.get(id=schedule_id, device__in=user_devices)
     except ApplianceSchedule.DoesNotExist:
         return Response({'error': 'Schedule not found'}, status=status.HTTP_404_NOT_FOUND)
-    
+
     schedule.delete()
     return Response({'message': 'Schedule deleted successfully'})
 
@@ -582,10 +602,10 @@ def device_schedules(request, device_id):
         device = Device.objects.get(id=device_id)
     except Device.DoesNotExist:
         return Response(
-            {'error': 'Device not found'}, 
+            {'error': 'Device not found'},
             status=status.HTTP_404_NOT_FOUND
         )
-    
+
     active_schedules = ApplianceSchedule.objects.filter(
         device=device,
         status='active'
