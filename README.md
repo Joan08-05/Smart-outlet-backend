@@ -140,7 +140,8 @@ Six PostgreSQL tables, implemented as Django models:
 
 ## Security Features
 
-- JWT authentication on all protected endpoints (access token: 30 minutes)
+- JWT authentication on all protected endpoints (access token: 30 minutes, refresh token: 60 days)
+- Refresh tokens are automatically rotated on each use, reducing the risk of a stolen refresh token being reused indefinitely
 - Device claiming system so ESP32 hardware never stores user credentials
 - Passwords hashed with Django's PBKDF2 (SHA-256), never stored in plaintext
 - Rate limiting: 20 req/min unauthenticated, 100 req/min authenticated
