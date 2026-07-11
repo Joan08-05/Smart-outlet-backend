@@ -59,9 +59,6 @@ urlpatterns = [
     # GET - retrieve full ON/OFF history for all devices of logged in user
     path('control-logs/', views.control_logs_history, name='control_logs_history'),
 
-    # ─── ADMIN ─────────────────────────────────────────────────────
-    # Emergency admin reset endpoint - protected by secret key
-    path('reset-admin/', views.reset_admin_password, name='reset_admin'),
     # ─── USER PROFILE ──────────────────────────────────────────────────
     # GET - get logged in user profile
     # PATCH - update logged in user profile

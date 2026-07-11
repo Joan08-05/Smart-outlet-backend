@@ -533,35 +533,6 @@ def get_pending_command(request, device_id):
 
     return Response({'status': device.status})
 
-
-# ─── ADMIN RESET ───────────────────────────────────────────────────
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def reset_admin_password(request):
-    """
-    Emergency admin creation endpoint - protected by secret key
-    """
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-
-    if request.data.get('secret') != 'joan2026smart':
-        return Response({'error': 'Unauthorized'}, status=status.HTTP_401_UNAUTHORIZED)
-
-    if not User.objects.filter(is_superuser=True).exists():
-        User.objects.create_superuser(
-            username='admin',
-            email='admin@smartoutlet.com',
-            password='SmartAdmin2026!'
-        )
-        return Response({'message': 'Superuser created'})
-
-    user = User.objects.get(username='admin')
-    user.set_password('SmartAdmin2026!')
-    user.save()
-    return Response({'message': 'Password reset successfully'})
-
-
 # ─── SCHEDULING ────────────────────────────────────────────────────
 
 @api_view(['GET', 'POST'])
