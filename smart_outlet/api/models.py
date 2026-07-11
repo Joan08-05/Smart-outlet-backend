@@ -5,6 +5,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 class User(AbstractUser):
+    email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     location = models.CharField(max_length=100, blank=True, null=True)
     

@@ -350,7 +350,17 @@ def receive_energy_data(request):
     Accepts: device, voltage, current, power, energy_kwh
     Simply stores the reading - safety detection is handled by ESP32
     firmware. ESP32 reports detected faults via POST /api/alerts/report/
+    Security: verifies the submitting user/device owns the target device
     """
+    device_id = request.data.get('device')
+    try:
+        Device.objects.get(id=device_id, user=request.user)
+    except Device.DoesNotExist:
+        return Response(
+            {'error': 'Device not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
     serializer = EnergyRecordSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
@@ -408,6 +418,7 @@ def report_safety_alert(request):
     so the user can see it in the mobile application.
     Accepts: device, alert_type, measured_value, threshold_value, action_taken
     alert_type options: OVERLOAD, OVERVOLTAGE, UNDERVOLTAGE
+    Security: verifies the reporting user/device owns the target device
     """
     device_id = request.data.get('device')
     alert_type = request.data.get('alert_type')
@@ -422,7 +433,7 @@ def report_safety_alert(request):
         )
 
     try:
-        device = Device.objects.get(id=device_id)
+        device = Device.objects.get(id=device_id, user=request.user)
     except Device.DoesNotExist:
         return Response(
             {'error': 'Device not found'},
@@ -455,9 +466,10 @@ def get_pending_command(request, device_id):
     If no end_time - schedule runs indefinitely.
     Otherwise returns the manually set device status.
     repeat_pattern values: daily, weekly, once, or blank for no repeat
+    Security: only returns commands for devices owned by the requesting user
     """
     try:
-        device = Device.objects.get(id=device_id)
+        device = Device.objects.get(id=device_id, user=request.user)
     except Device.DoesNotExist:
         return Response(
             {'error': 'Device not found'},
@@ -560,6 +572,7 @@ def schedules(request):
     POST - Creates a new schedule for a device
     Both start_time and end_time are optional.
     repeat_pattern options: daily, weekly, once, or leave blank for no repeat
+    Security: users can only create schedules for their own devices
     """
     if request.method == 'GET':
         user_devices = Device.objects.filter(user=request.user)
@@ -568,6 +581,15 @@ def schedules(request):
         return Response(serializer.data)
 
     if request.method == 'POST':
+        device_id = request.data.get('device')
+        try:
+            Device.objects.get(id=device_id, user=request.user)
+        except Device.DoesNotExist:
+            return Response(
+                {'error': 'Device not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         serializer = ApplianceScheduleSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -598,9 +620,10 @@ def device_schedules(request, device_id):
     """
     GET - Returns active schedules for a specific device
     Used by ESP32 to check scheduled operations
+    Security: only returns schedules for devices owned by the requesting user
     """
     try:
-        device = Device.objects.get(id=device_id)
+        device = Device.objects.get(id=device_id, user=request.user)
     except Device.DoesNotExist:
         return Response(
             {'error': 'Device not found'},

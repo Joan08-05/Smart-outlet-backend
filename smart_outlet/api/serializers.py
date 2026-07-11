@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 from django.core.validators import RegexValidator
 from django.contrib.auth.password_validation import validate_password
 from .models import User, Device, EnergyRecord, ControlLog, SafetyAlert, ApplianceSchedule
@@ -6,7 +7,17 @@ from .models import User, Device, EnergyRecord, ControlLog, SafetyAlert, Applian
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
-    
+
+    # Email must be unique - returns a clean 400 error instead of a database crash
+    email = serializers.EmailField(
+        validators=[
+            UniqueValidator(
+                queryset=User.objects.all(),
+                message='This email is already registered.'
+            )
+        ]
+    )
+
     # Tanzania phone number validation - accepts +255XXXXXXXXX or 0XXXXXXXXX
     phone = serializers.CharField(
         required=False,
@@ -89,6 +100,7 @@ class ApplianceScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ApplianceSchedule
         fields = '__all__'
+
 
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
