@@ -55,12 +55,21 @@ class ControlLog(models.Model):
 
 
 class SafetyAlert(models.Model):
+    ALERT_TYPES = [
+        ('undervoltage', 'Undervoltage'),
+        ('overvoltage', 'Overvoltage'),
+        ('overcurrent', 'Overcurrent'),
+        ('overload', 'Overload'),
+    ]
+
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    alert_type = models.CharField(max_length=50)
+    alert_type = models.CharField(max_length=50, choices=ALERT_TYPES)
     measured_value = models.FloatField()
     threshold_value = models.FloatField()
     action_taken = models.CharField(max_length=100, blank=True, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
+    is_resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(blank=True, null=True)
 
     def __str__(self):
         return f"{self.alert_type} - {self.device.device_name}"

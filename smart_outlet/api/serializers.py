@@ -93,7 +93,21 @@ class SafetyAlertSerializer(serializers.ModelSerializer):
     class Meta:
         model = SafetyAlert
         fields = '__all__'
-        read_only_fields = ['timestamp']
+        read_only_fields = ['timestamp', 'resolved_at']
+
+    def validate_alert_type(self, value):
+        """
+        Validates that the alert type is one of the four types
+        determined by the ESP32. The backend does not classify
+        or rename alert types - it stores exactly what the ESP32 sends.
+        Valid types: undervoltage, overvoltage, overcurrent, overload
+        """
+        valid_types = ['undervoltage', 'overvoltage', 'overcurrent', 'overload']
+        if value.lower() not in valid_types:
+            raise serializers.ValidationError(
+                f'Invalid alert type. Must be one of: {", ".join(valid_types)}'
+            )
+        return value.lower()
 
 
 class ApplianceScheduleSerializer(serializers.ModelSerializer):

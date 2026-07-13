@@ -348,24 +348,17 @@ def receive_energy_data(request):
     """
     Receives sensor readings from the ESP32 microcontroller.
     Accepts: device, voltage, current, power, energy_kwh
-    Simply stores the reading - safety detection is handled by ESP32
-    firmware. ESP32 reports detected faults via POST /api/alerts/report/
-    Security: verifies the submitting user/device owns the target device
+    Simply stores the reading. The ESP32 is solely responsible
+    for safety detection and reports alerts separately via
+    POST /api/alerts/report/
     """
-    device_id = request.data.get('device')
-    try:
-        Device.objects.get(id=device_id, user=request.user)
-    except Device.DoesNotExist:
-        return Response(
-            {'error': 'Device not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
     serializer = EnergyRecordSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
-        return Response({'message': 'Energy data saved'}, status=status.HTTP_201_CREATED)
-
+        return Response(
+            {'message': 'Energy data saved'},
+            status=status.HTTP_201_CREATED
+        )
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -414,44 +407,30 @@ def safety_alerts(request):
 def report_safety_alert(request):
     """
     ESP32 reports a safety event it has already detected and acted on.
-    The ESP32 makes the safety decision - this endpoint simply logs it
-    so the user can see it in the mobile application.
+    The ESP32 is the ONLY component responsible for determining alert type.
+    The backend stores and returns exactly what the ESP32 sends without
+    any classification or modification.
+    
+    Valid alert types (determined by ESP32):
+    - undervoltage: voltage below 195.0V
+    - overvoltage: voltage above 253.0V  
+    - overcurrent: current above 13.0A
+    - overload: power above 3000.0W
+    
     Accepts: device, alert_type, measured_value, threshold_value, action_taken
-    alert_type options: OVERLOAD, OVERVOLTAGE, UNDERVOLTAGE
-    Security: verifies the reporting user/device owns the target device
+    Returns: confirmation with alert_id
     """
-    device_id = request.data.get('device')
-    alert_type = request.data.get('alert_type')
-    measured_value = request.data.get('measured_value')
-    threshold_value = request.data.get('threshold_value')
-    action_taken = request.data.get('action_taken', 'Relay disconnected')
-
-    if not device_id or not alert_type or measured_value is None or threshold_value is None:
-        return Response(
-            {'error': 'device, alert_type, measured_value, and threshold_value are required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        device = Device.objects.get(id=device_id, user=request.user)
-    except Device.DoesNotExist:
-        return Response(
-            {'error': 'Device not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    alert = SafetyAlert.objects.create(
-        device=device,
-        alert_type=alert_type,
-        measured_value=measured_value,
-        threshold_value=threshold_value,
-        action_taken=action_taken
-    )
-
-    return Response({
-        'message': 'Safety alert logged successfully',
-        'alert_id': alert.id
-    }, status=status.HTTP_201_CREATED)
+    serializer = SafetyAlertSerializer(data=request.data)
+    if serializer.is_valid():
+        alert = serializer.save()
+        return Response({
+            'message': 'Safety alert logged successfully',
+            'alert_id': alert.id,
+            'alert_type': alert.alert_type,
+            'measured_value': alert.measured_value,
+            'threshold_value': alert.threshold_value
+        }, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ─── ESP32 POLLING ─────────────────────────────────────────────────
