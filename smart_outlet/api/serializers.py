@@ -115,6 +115,20 @@ class ApplianceScheduleSerializer(serializers.ModelSerializer):
         model = ApplianceSchedule
         fields = '__all__'
 
+    def validate_repeat_pattern(self, value):
+        """
+        Normalizes repeat_pattern to lowercase before saving.
+        Accepts DAILY, Daily, daily — all stored as daily.
+        Valid values: none, daily, weekly, weekdays, weekends
+        """
+        valid = ['none', 'daily', 'weekly', 'weekdays', 'weekends']
+        normalized = value.lower().strip()
+        if normalized not in valid:
+            raise serializers.ValidationError(
+                f'Invalid repeat pattern. Must be one of: {", ".join(valid)}'
+            )
+        return normalized
+
 
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:

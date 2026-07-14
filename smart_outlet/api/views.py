@@ -11,6 +11,7 @@ from .serializers import (UserRegistrationSerializer, DeviceSerializer,
                           EnergyRecordSerializer, ControlLogSerializer,
                           SafetyAlertSerializer, ApplianceScheduleSerializer,
                           UserProfileSerializer)
+from .utils import get_active_schedule_for_device
 import secrets
 import string
 from django.contrib.auth.hashers import make_password, check_password
@@ -95,14 +96,7 @@ def devices(request):
 
         # Check and apply active schedules for each device
         for device in user_devices:
-            active_schedule = ApplianceSchedule.objects.filter(
-                device=device,
-                status='active'
-            ).filter(
-                Q(start_time__isnull=True) | Q(start_time__lte=now)
-            ).filter(
-                Q(end_time__isnull=True) | Q(end_time__gte=now)
-            ).first()
+            active_schedule = get_active_schedule_for_device(device, now)
 
             if active_schedule:
                 if device.status != 'ON':
@@ -444,7 +438,7 @@ def get_pending_command(request, device_id):
     If no start_time - schedule is immediately active.
     If no end_time - schedule runs indefinitely.
     Otherwise returns the manually set device status.
-    repeat_pattern values: daily, weekly, once, or blank for no repeat
+    repeat_pattern values: none, daily, weekly, weekdays, weekends
     Security: only returns commands for devices owned by the requesting user
     """
     try:
@@ -457,14 +451,7 @@ def get_pending_command(request, device_id):
 
     now = timezone.now()
 
-    active_schedule = ApplianceSchedule.objects.filter(
-        device=device,
-        status='active'
-    ).filter(
-        Q(start_time__isnull=True) | Q(start_time__lte=now)
-    ).filter(
-        Q(end_time__isnull=True) | Q(end_time__gte=now)
-    ).first()
+    active_schedule = get_active_schedule_for_device(device, now)
 
     if active_schedule:
         scheduled_status = 'ON'
@@ -521,7 +508,7 @@ def schedules(request):
     GET - Returns all schedules for devices belonging to the logged in user
     POST - Creates a new schedule for a device
     Both start_time and end_time are optional.
-    repeat_pattern options: daily, weekly, once, or leave blank for no repeat
+    repeat_pattern options: none, daily, weekly, weekdays, weekends
     Security: users can only create schedules for their own devices
     """
     if request.method == 'GET':
