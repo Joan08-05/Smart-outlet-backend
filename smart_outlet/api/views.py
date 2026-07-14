@@ -484,6 +484,8 @@ def get_pending_command(request, device_id):
             'schedule_ends': active_schedule.end_time
         })
 
+    # No active schedule found
+    # Check if device was last turned ON by a schedule
     was_scheduled_on = ControlLog.objects.filter(
         device=device,
         action='ON',
@@ -505,6 +507,21 @@ def get_pending_command(request, device_id):
                 action='OFF',
                 control_source='schedule_ended'
             )
+
+            # Set completed none schedules to inactive
+            # Daily schedules stay active - they repeat tomorrow
+            completed_schedule = ApplianceSchedule.objects.filter(
+                device=device,
+                status='active',
+                repeat_pattern='none'
+            ).filter(
+                Q(end_time__isnull=False, end_time__lte=now)
+            ).first()
+
+            if completed_schedule:
+                completed_schedule.status = 'inactive'
+                completed_schedule.save()
+
             return Response({
                 'status': 'OFF',
                 'source': 'schedule_ended'
@@ -545,7 +562,76 @@ def schedules(request):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def toggle_schedule(request, schedule_id):
+    """
+    Toggles a schedule between active and inactive.
+    
+    When toggling ON (inactive → active):
+    - Updates start_time to today's date but keeps the original time
+    - Sets status to active
+    - This allows the schedule to execute again today
+    
+    When toggling OFF (active → inactive):
+    - Sets status to inactive
+    - Schedule stops executing until toggled back ON
+    
+    The frontend listens to the status field to determine toggle state.
+    """
+    try:
+        user_devices = Device.objects.filter(user=request.user)
+        schedule = ApplianceSchedule.objects.get(
+            id=schedule_id,
+            device__in=user_devices
+        )
+    except ApplianceSchedule.DoesNotExist:
+        return Response(
+            {'error': 'Schedule not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
 
+    if schedule.status == 'active':
+        # Toggle OFF - set to inactive
+        schedule.status = 'inactive'
+        schedule.save()
+        return Response({
+            'message': 'Schedule deactivated',
+            'status': 'inactive',
+            'schedule_id': schedule.id
+        })
+    else:
+        # Toggle ON - update start_time to today but keep original time
+        if schedule.start_time:
+            today = timezone.now().date()
+            original_time = schedule.start_time.time()
+            original_tzinfo = schedule.start_time.tzinfo
+            
+            # Combine today's date with the original time
+            from datetime import datetime
+            new_start = datetime.combine(today, original_time)
+            
+            # Make timezone aware
+            new_start = timezone.make_aware(new_start) if timezone.is_naive(new_start) else new_start.replace(tzinfo=original_tzinfo)
+            schedule.start_time = new_start
+
+            # Also update end_time to today if it exists
+            if schedule.end_time:
+                original_end_time = schedule.end_time.time()
+                new_end = datetime.combine(today, original_end_time)
+                new_end = timezone.make_aware(new_end) if timezone.is_naive(new_end) else new_end.replace(tzinfo=original_tzinfo)
+                schedule.end_time = new_end
+
+        schedule.status = 'active'
+        schedule.save()
+        return Response({
+            'message': 'Schedule activated with todays date',
+            'status': 'active',
+            'schedule_id': schedule.id,
+            'new_start_time': schedule.start_time,
+            'new_end_time': schedule.end_time
+        })
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])

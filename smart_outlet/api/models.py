@@ -76,11 +76,20 @@ class SafetyAlert(models.Model):
 
 
 class ApplianceSchedule(models.Model):
+    REPEAT_CHOICES = [
+        ('none', 'None - runs once only'),
+        ('daily', 'Daily - repeats every day at same time'),
+    ]
+
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
     start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
-    repeat_pattern = models.CharField(max_length=50, blank=True, null=True)
+    repeat_pattern = models.CharField(
+        max_length=20,
+        choices=REPEAT_CHOICES,
+        default='none'
+    )
     status = models.CharField(max_length=20, default='active')
 
     def __str__(self):
-        return f"{self.device.device_name} schedule"
+        return f"{self.device.device_name} schedule - {self.repeat_pattern}"

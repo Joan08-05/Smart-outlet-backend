@@ -48,6 +48,8 @@ urlpatterns = [
     # GET - retrieve all schedules for logged in user
     # POST - create a new schedule
     path('schedules/', views.schedules, name='schedules'),
+    # POST - toggle schedule between active and inactive
+    path('schedules/<int:schedule_id>/toggle/', views.toggle_schedule, name='toggle_schedule'),
 
     # DELETE - delete a specific schedule
     path('schedules/<int:schedule_id>/', views.delete_schedule, name='delete_schedule'),
