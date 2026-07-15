@@ -6,6 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.db.models import Q
+from datetime import timedelta
 from .models import User, Device, EnergyRecord, ControlLog, SafetyAlert, ApplianceSchedule
 from .serializers import (UserRegistrationSerializer, DeviceSerializer,
                           EnergyRecordSerializer, ControlLogSerializer,
@@ -14,6 +15,79 @@ from .serializers import (UserRegistrationSerializer, DeviceSerializer,
 import secrets
 import string
 from django.contrib.auth.hashers import make_password, check_password
+
+
+# ─── SCHEDULING ENGINE ──────────────────────────────────────────────
+# Single source of truth for automatic schedule execution.
+# Called by both the mobile app's device list (GET /devices/) and the
+# ESP32's polling endpoint (GET /devices/<id>/command/) so behavior is
+# identical no matter which client happens to trigger it.
+#
+# Rules implemented here:
+# - start_time only, no end_time  -> turn ON once at start_time, then stay
+#   ON indefinitely. Schedule itself never auto-deactivates. Deleting the
+#   schedule (handled elsewhere) does not touch device state - it just
+#   removes the row, so this function simply won't see it anymore.
+# - start_time + end_time, repeat_pattern='none' -> turn ON at start_time,
+#   turn OFF at end_time, then set schedule.status = 'inactive'.
+# - start_time + end_time, repeat_pattern='daily' -> turn ON at start_time,
+#   turn OFF at end_time, then roll start_time/end_time forward by however
+#   many whole days are needed to land back in the future, keeping the
+#   schedule 'active' so it fires again at the next occurrence with no
+#   manual action required.
+def _process_device_schedule(device, now=None):
+    if now is None:
+        now = timezone.now()
+
+    active_schedules = ApplianceSchedule.objects.filter(device=device, status='active')
+
+    current_schedule = None
+    just_ended = False
+
+    for schedule in active_schedules:
+        # Not started yet - ignore for now
+        if schedule.start_time and schedule.start_time > now:
+            continue
+
+        # Indefinite (no end_time) or still within its active window
+        if not schedule.end_time or now < schedule.end_time:
+            if device.status != 'ON':
+                device.status = 'ON'
+                device.save()
+                ControlLog.objects.create(
+                    device=device,
+                    action='ON',
+                    control_source='schedule'
+                )
+            current_schedule = schedule
+            continue
+
+        # end_time has passed - execute the end action
+        if device.status != 'OFF':
+            device.status = 'OFF'
+            device.save()
+            ControlLog.objects.create(
+                device=device,
+                action='OFF',
+                control_source='schedule_ended'
+            )
+            just_ended = True
+
+        if schedule.repeat_pattern == 'daily':
+            # Roll the window forward day-by-day until it's in the future
+            # again. This is what makes recurring schedules fire on their
+            # own, with no manual toggle needed.
+            while schedule.end_time and schedule.end_time <= now:
+                if schedule.start_time:
+                    schedule.start_time = schedule.start_time + timedelta(days=1)
+                schedule.end_time = schedule.end_time + timedelta(days=1)
+            schedule.save()
+        else:
+            # One-off schedule - it has run its course
+            schedule.status = 'inactive'
+            schedule.save()
+
+    return current_schedule, just_ended
 
 
 # ─── USER AUTHENTICATION ───────────────────────────────────────────
@@ -95,46 +169,7 @@ def devices(request):
 
         # Check and apply active schedules for each device
         for device in user_devices:
-            active_schedule = ApplianceSchedule.objects.filter(
-                device=device,
-                status='active'
-            ).filter(
-                Q(start_time__isnull=True) | Q(start_time__lte=now)
-            ).filter(
-                Q(end_time__isnull=True) | Q(end_time__gte=now)
-            ).first()
-
-            if active_schedule:
-                if device.status != 'ON':
-                    device.status = 'ON'
-                    device.save()
-                    ControlLog.objects.create(
-                        device=device,
-                        action='ON',
-                        control_source='schedule'
-                    )
-            else:
-                was_scheduled_on = ControlLog.objects.filter(
-                    device=device,
-                    action='ON',
-                    control_source='schedule'
-                ).order_by('-timestamp').first()
-
-                was_manually_turned_on = ControlLog.objects.filter(
-                    device=device,
-                    action='ON',
-                    control_source='mobile_app'
-                ).order_by('-timestamp').first()
-
-                if device.status == 'ON' and was_scheduled_on:
-                    if not was_manually_turned_on or was_scheduled_on.timestamp > was_manually_turned_on.timestamp:
-                        device.status = 'OFF'
-                        device.save()
-                        ControlLog.objects.create(
-                            device=device,
-                            action='OFF',
-                            control_source='schedule_ended'
-                        )
+            _process_device_schedule(device, now)
 
         # Refresh queryset after schedule updates
         user_devices = Device.objects.filter(user=request.user)
@@ -410,13 +445,13 @@ def report_safety_alert(request):
     The ESP32 is the ONLY component responsible for determining alert type.
     The backend stores and returns exactly what the ESP32 sends without
     any classification or modification.
-    
+
     Valid alert types (determined by ESP32):
     - undervoltage: voltage below 195.0V
-    - overvoltage: voltage above 253.0V  
+    - overvoltage: voltage above 253.0V
     - overcurrent: current above 13.0A
     - overload: power above 3000.0W
-    
+
     Accepts: device, alert_type, measured_value, threshold_value, action_taken
     Returns: confirmation with alert_id
     """
@@ -440,11 +475,9 @@ def report_safety_alert(request):
 def get_pending_command(request, device_id):
     """
     Polled by ESP32 every few seconds.
-    Checks active schedules first - both start_time and end_time are optional.
-    If no start_time - schedule is immediately active.
-    If no end_time - schedule runs indefinitely.
-    Otherwise returns the manually set device status.
-    repeat_pattern values: daily, weekly, once, or blank for no repeat
+    Runs the same scheduling engine used by the mobile app's device list,
+    so automatic execution behaves identically regardless of which client
+    triggers the check.
     Security: only returns commands for devices owned by the requesting user
     """
     try:
@@ -456,78 +489,23 @@ def get_pending_command(request, device_id):
         )
 
     now = timezone.now()
+    current_schedule, just_ended = _process_device_schedule(device, now)
 
-    active_schedule = ApplianceSchedule.objects.filter(
-        device=device,
-        status='active'
-    ).filter(
-        Q(start_time__isnull=True) | Q(start_time__lte=now)
-    ).filter(
-        Q(end_time__isnull=True) | Q(end_time__gte=now)
-    ).first()
-
-    if active_schedule:
-        scheduled_status = 'ON'
-
-        if device.status != scheduled_status:
-            device.status = scheduled_status
-            device.save()
-            ControlLog.objects.create(
-                device=device,
-                action=scheduled_status,
-                control_source='schedule'
-            )
-
+    if current_schedule:
         return Response({
-            'status': scheduled_status,
+            'status': 'ON',
             'source': 'schedule',
-            'schedule_ends': active_schedule.end_time
+            'schedule_ends': current_schedule.end_time
         })
 
-    # No active schedule found
-    # Check if device was last turned ON by a schedule
-    was_scheduled_on = ControlLog.objects.filter(
-        device=device,
-        action='ON',
-        control_source='schedule'
-    ).order_by('-timestamp').first()
-
-    was_manually_turned_on = ControlLog.objects.filter(
-        device=device,
-        action='ON',
-        control_source='mobile_app'
-    ).order_by('-timestamp').first()
-
-    if device.status == 'ON' and was_scheduled_on:
-        if not was_manually_turned_on or was_scheduled_on.timestamp > was_manually_turned_on.timestamp:
-            device.status = 'OFF'
-            device.save()
-            ControlLog.objects.create(
-                device=device,
-                action='OFF',
-                control_source='schedule_ended'
-            )
-
-            # Set completed none schedules to inactive
-            # Daily schedules stay active - they repeat tomorrow
-            completed_schedule = ApplianceSchedule.objects.filter(
-                device=device,
-                status='active',
-                repeat_pattern='none'
-            ).filter(
-                Q(end_time__isnull=False, end_time__lte=now)
-            ).first()
-
-            if completed_schedule:
-                completed_schedule.status = 'inactive'
-                completed_schedule.save()
-
-            return Response({
-                'status': 'OFF',
-                'source': 'schedule_ended'
-            })
+    if just_ended:
+        return Response({
+            'status': 'OFF',
+            'source': 'schedule_ended'
+        })
 
     return Response({'status': device.status})
+
 
 # ─── SCHEDULING ────────────────────────────────────────────────────
 
@@ -562,82 +540,16 @@ def schedules(request):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def toggle_schedule(request, schedule_id):
-    """
-    Toggles a schedule between active and inactive.
-    
-    When toggling ON (inactive → active):
-    - Updates start_time to today's date but keeps the original time
-    - Sets status to active
-    - This allows the schedule to execute again today
-    
-    When toggling OFF (active → inactive):
-    - Sets status to inactive
-    - Schedule stops executing until toggled back ON
-    
-    The frontend listens to the status field to determine toggle state.
-    """
-    try:
-        user_devices = Device.objects.filter(user=request.user)
-        schedule = ApplianceSchedule.objects.get(
-            id=schedule_id,
-            device__in=user_devices
-        )
-    except ApplianceSchedule.DoesNotExist:
-        return Response(
-            {'error': 'Schedule not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
 
-    if schedule.status == 'active':
-        # Toggle OFF - set to inactive
-        schedule.status = 'inactive'
-        schedule.save()
-        return Response({
-            'message': 'Schedule deactivated',
-            'status': 'inactive',
-            'schedule_id': schedule.id
-        })
-    else:
-        # Toggle ON - update start_time to today but keep original time
-        if schedule.start_time:
-            today = timezone.now().date()
-            original_time = schedule.start_time.time()
-            original_tzinfo = schedule.start_time.tzinfo
-            
-            # Combine today's date with the original time
-            from datetime import datetime
-            new_start = datetime.combine(today, original_time)
-            
-            # Make timezone aware
-            new_start = timezone.make_aware(new_start) if timezone.is_naive(new_start) else new_start.replace(tzinfo=original_tzinfo)
-            schedule.start_time = new_start
-
-            # Also update end_time to today if it exists
-            if schedule.end_time:
-                original_end_time = schedule.end_time.time()
-                new_end = datetime.combine(today, original_end_time)
-                new_end = timezone.make_aware(new_end) if timezone.is_naive(new_end) else new_end.replace(tzinfo=original_tzinfo)
-                schedule.end_time = new_end
-
-        schedule.status = 'active'
-        schedule.save()
-        return Response({
-            'message': 'Schedule activated with todays date',
-            'status': 'active',
-            'schedule_id': schedule.id,
-            'new_start_time': schedule.start_time,
-            'new_end_time': schedule.end_time
-        })
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def delete_schedule(request, schedule_id):
     """
     DELETE - Deletes a specific schedule
+    Does not change current device state - only prevents future executions
+    of this schedule, since the schedule engine simply won't see this row
+    anymore.
     Security: users can only delete schedules for their own devices
     """
     try:

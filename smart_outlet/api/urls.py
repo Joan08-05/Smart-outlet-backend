@@ -13,7 +13,7 @@ urlpatterns = [
     path('devices/claim/', views.claim_device, name='claim_device'),
     path('devices/auth/', views.device_auth, name='device_auth'),
     path('devices/<int:device_id>/regenerate-claim/', views.regenerate_claim_code, name='regenerate_claim_code'),
-    
+
 
     # ─── DEVICE MANAGEMENT ─────────────────────────────────────────
     # GET - retrieve all devices for logged in user
@@ -40,7 +40,7 @@ urlpatterns = [
     # ─── SAFETY ALERTS ─────────────────────────────────────────────
     # GET - mobile app retrieves all safety alerts for logged in user
     path('alerts/', views.safety_alerts, name='safety_alerts'),
-    
+
     # POST - ESP32 reports a safety alert it has already detected
     path('alerts/report/', views.report_safety_alert, name='report_safety_alert'),
 
@@ -48,8 +48,6 @@ urlpatterns = [
     # GET - retrieve all schedules for logged in user
     # POST - create a new schedule
     path('schedules/', views.schedules, name='schedules'),
-    # POST - toggle schedule between active and inactive
-    path('schedules/<int:schedule_id>/toggle/', views.toggle_schedule, name='toggle_schedule'),
 
     # DELETE - delete a specific schedule
     path('schedules/<int:schedule_id>/', views.delete_schedule, name='delete_schedule'),
