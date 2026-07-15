@@ -45,12 +45,23 @@ def _process_device_schedule(device, now=None):
     just_ended = False
 
     for schedule in active_schedules:
-        # Not started yet - ignore for now
-        if schedule.start_time and schedule.start_time > now:
+        has_start = schedule.start_time is not None
+        has_end = schedule.end_time is not None
+
+        # Not started yet - ignore for now (only relevant if a start_time exists)
+        if has_start and schedule.start_time > now:
             continue
 
-        # Indefinite (no end_time) or still within its active window
-        if not schedule.end_time or now < schedule.end_time:
+        # A device is only ever turned ON by a schedule that HAS a
+        # start_time. A schedule with only an end_time (no start_time)
+        # never has an "ON phase" - it exists purely to turn something
+        # off. Without this check, once repeat_pattern='daily' rolls
+        # end_time forward into the future, "now < end_time" becomes
+        # true again and the code would wrongly think it's inside an
+        # ON window and switch the device back on.
+        within_on_window = has_start and (not has_end or now < schedule.end_time)
+
+        if within_on_window:
             if device.status != 'ON':
                 device.status = 'ON'
                 device.save()
@@ -60,6 +71,11 @@ def _process_device_schedule(device, now=None):
                     control_source='schedule'
                 )
             current_schedule = schedule
+            continue
+
+        # Not in an ON window. If there's no end_time to act on, or the
+        # end_time hasn't arrived yet, there's nothing to do this poll.
+        if not has_end or now < schedule.end_time:
             continue
 
         # end_time has passed - execute the end action
